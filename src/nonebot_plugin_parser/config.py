@@ -46,13 +46,14 @@ class Config(BaseModel):
     """Renderer 类型"""
     parser_custom_font: str | None = None
     """自定义字体"""
-    parser_need_forward_contents: bool = True
+    parser_need_forward_contents: bool = Ture
     """是否需要转发媒体内容"""
     parser_emoji_cdn: str = ELK_SH_CDN
     """Pilmoji 表情 CDN"""
     parser_emoji_style: EmojiStyle = EmojiStyle.FACEBOOK
     """Pilmoji 表情样式"""
-
+    send_media_card: bool = False  # 【新增】
+    """是否发送媒体卡片"""
     @property
     def nickname(self) -> str:
         """机器人昵称"""
@@ -152,6 +153,7 @@ class Config(BaseModel):
     def emoji_style(self) -> EmojiStyle:
         """Pilmoji 表情样式"""
         return self.parser_emoji_style
+
 
 
 pconfig: Config = get_plugin_config(Config)
