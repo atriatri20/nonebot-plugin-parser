@@ -78,13 +78,22 @@ async def parser_handler(
     else:
         logger.debug(f"命中缓存: {cache_key}, 结果: {result}")
 
-    # 3. 渲染内容消息并发送
-    renderer = get_renderer(result.platform.name)
-    async for message in renderer.render_messages(result):
-        await message.send()
+    # 3. 【修改】检查配置，决定是否发送
+    if not pconfig.send_media_card:
+        # 不发送卡片，只发送媒体内容
+        # 调用 render_contents 但不调用 render_messages
+        renderer = get_renderer(result.platform.name)
+        async for message in renderer.render_contents(result):
+            await message.send()
+    else:
+        # 正常发送（卡片 + 媒体内容）
+        renderer = get_renderer(result.platform.name)
+        async for message in renderer.render_messages(result):
+            await message.send()
 
     # 4. 缓存解析结果
     _RESULT_CACHE[cache_key] = result
+
 
 
 @on_command("bm", priority=3, block=True).handle()
