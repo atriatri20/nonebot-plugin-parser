@@ -52,7 +52,7 @@ class Config(BaseModel):
     """Pilmoji 表情 CDN"""
     parser_emoji_style: EmojiStyle = EmojiStyle.FACEBOOK
     """Pilmoji 表情样式"""
-    send_media_card: bool = False  # 【新增】
+    send_media_card: bool = False  # 【新增是否发送媒体卡片选项】
     """是否发送媒体卡片"""
     @property
     def nickname(self) -> str:
