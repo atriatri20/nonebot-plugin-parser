@@ -1,12 +1,19 @@
 import re
 import json
+import asyncio
+from io import BytesIO
 from typing import Any, ClassVar
-
+from PIL import Image
 from httpx import Cookies, AsyncClient
 from msgspec import Struct, field, convert
 from nonebot import logger
+import tempfile
+from pathlib import Path
 
-from .base import Platform, BaseParser, PlatformEnum, ParseException, handle
+# 使用绝对导入
+from nonebot_plugin_parser.parsers.base import Platform, BaseParser, PlatformEnum, ParseException, handle
+from nonebot_plugin_parser.parsers.data import ImageContent
+from nonebot_plugin_parser.download import DOWNLOADER
 
 
 class XiaoHongShuParser(BaseParser):
@@ -46,7 +53,7 @@ class XiaoHongShuParser(BaseParser):
         xhs_id = searched.group("xhs_id")
         return await self.parse_explore(url, xhs_id)
 
-    # https://www.xiaohongshu.com/discovery/item/68e8e3fa00000000030342ec?app_platform=android&ignoreEngage=true&app_version=9.6.0&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CBW9rwIV2qhcCD-JsQAOSHd2tTW9jXAtzqlgVXp6c52Sw%3D&author_share=1&xhsshare=QQ&shareRedId=ODs3RUk5ND42NzUyOTgwNjY3OTo8S0tK&apptime=1761372823&share_id=3b61945239ac403db86bea84a4f15124&share_channel=qq
+    # https://www.xiaohongshu.com/discovery/item/68e8e3fa00000000030342ec?app_platform=android&ignoreEngage=true&app_version=9.6.0&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CBW9rwIV2qhcCD-JsQAOSHd2tTW9jXAtzqlgVXp6c52Sw%3D&author_share=1&shareRedId=ODs3RUk5ND42NzUyOTgwNjY3OTo8S0tK&apptime=1761372823&share_id=3b61945239ac403db86bea84a4f15124&share_channel=qq
     @handle(
         "hongshu.com/discovery/item/",
         r"discovery/item/(?P<xhs_id>[0-9a-zA-Z]+)\?[A-Za-z0-9._%&+=/#@-]*",
@@ -61,6 +68,59 @@ class XiaoHongShuParser(BaseParser):
         except ParseException:
             logger.debug("parse_explore failed, fallback to parse_discovery")
             return await self.parse_discovery(f"https://www.xiaohongshu.com/{route}")
+
+    async def _convert_webp_to_jpg(self, url: str, index: int = 0) -> tuple[int, bytes | None]:
+        """异步下载图片并转换为JPG字节数据"""
+        try:
+            async with AsyncClient(headers=self.headers, verify=False) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+                # 打开图像
+                image = Image.open(BytesIO(response.content))
+
+                # 确保转换为RGB模式（JPG不支持透明度）
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+
+                # 转换为JPG字节数据
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=95)
+                jpg_data = output.getvalue()
+
+                logger.debug(f"[小红书转换] 图片{index}: {url[:60]}... {len(jpg_data)} bytes")
+                return index, jpg_data
+
+        except Exception as e:
+            logger.warning(f"[小红书转换] 失败 图片{index}: {url[:60]}... {e}")
+            return index, None
+
+    async def _create_jpg_task(self, jpg_data: bytes) -> Path:
+        """将JPG字节数据保存到临时文件并返回路径"""
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
+            f.write(jpg_data)
+            temp_path = Path(f.name)
+
+        if not hasattr(self, '_temp_files'):
+            self._temp_files = []
+        self._temp_files.append(temp_path)
+
+        logger.debug(f"[临时文件] 创建JPG文件: {temp_path}")
+        return temp_path
+
+    def create_image_contents(self, image_sources: list) -> list:
+        """创建图片内容，支持URL或JPG字节数据"""
+        contents = []
+        for source in image_sources:
+            if isinstance(source, bytes):
+                # 为JPG字节数据创建异步任务
+                task = asyncio.create_task(self._create_jpg_task(source))
+                contents.append(ImageContent(task))
+            elif isinstance(source, str):
+                # 为URL使用原有下载器
+                task = DOWNLOADER.download_img(source, ext_headers=self.headers)
+                contents.append(ImageContent(task))
+        return contents
 
     async def parse_explore(self, url: str, xhs_id: str):
         async with AsyncClient(
@@ -122,7 +182,28 @@ class XiaoHongShuParser(BaseParser):
 
         # 添加图片内容
         elif image_urls := note_detail.image_urls:
-            contents.extend(self.create_image_contents(image_urls))
+            logger.info(f"[小红书解析] 发现{len(image_urls)}张图片，开始转换...")
+
+            # 并发转换所有图片
+            convert_tasks = [
+                self._convert_webp_to_jpg(img_url, i)
+                for i, img_url in enumerate(image_urls)
+            ]
+            results = await asyncio.gather(*convert_tasks)
+            results.sort(key=lambda x: x[0])
+
+            image_sources = []
+            success_count = 0
+
+            for idx, jpg_data in results:
+                if jpg_data:
+                    image_sources.append(jpg_data)
+                    success_count += 1
+                else:
+                    image_sources.append(image_urls[idx])
+
+            logger.info(f"[小红书解析] 转换成功: {success_count}/{len(image_urls)}")
+            contents.extend(self.create_image_contents(image_sources))
 
         # 构建作者
         author = self.create_author(note_detail.nickname, note_detail.avatar_url)
@@ -202,7 +283,27 @@ class XiaoHongShuParser(BaseParser):
                 img_urls = note_data.image_urls
             contents.append(self.create_video_content(video_url, img_urls[0]))
         elif img_urls := note_data.image_urls:
-            contents.extend(self.create_image_contents(img_urls))
+            logger.info(f"[小红书解析] 发现{len(img_urls)}张图片，开始转换...")
+
+            convert_tasks = [
+                self._convert_webp_to_jpg(img_url, i)
+                for i, img_url in enumerate(img_urls)
+            ]
+            results = await asyncio.gather(*convert_tasks)
+            results.sort(key=lambda x: x[0])
+
+            image_sources = []
+            success_count = 0
+
+            for idx, jpg_data in results:
+                if jpg_data:
+                    image_sources.append(jpg_data)
+                    success_count += 1
+                else:
+                    image_sources.append(img_urls[idx])
+
+            logger.info(f"[小红书解析] 转换成功: {success_count}/{len(img_urls)}")
+            contents.extend(self.create_image_contents(image_sources))
 
         return self.result(
             title=note_data.title,
