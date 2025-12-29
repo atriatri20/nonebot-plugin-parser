@@ -5,6 +5,8 @@ from nonebot import logger, get_driver, on_command
 from nonebot.params import CommandArg
 from nonebot.adapters import Message
 
+from nonebot.matcher import Matcher
+
 from .rule import SUPER_PRIVATE, Searched, SearchResult, on_keyword_regex
 from ..utils import LimitedSizeDict
 from ..config import pconfig
@@ -63,6 +65,7 @@ def clear_result_cache():
 
 @UniHelper.with_reaction
 async def parser_handler(
+    matcher: Matcher, 
     sr: SearchResult = Searched(),
 ):
     """统一的解析处理器"""
@@ -129,7 +132,10 @@ if YTDLP_DOWNLOADER is not None:
 
     @on_command("ym", priority=3, block=True).handle()
     @UniHelper.with_reaction
-    async def _(message: Message = CommandArg()):
+    async def _(
+        matcher: Matcher,  # 新增该行
+        message: Message = CommandArg()
+    ):
         text = message.extract_plain_text()
         parser = get_parser_by_type(YouTubeParser)
         _, matched = parser.search_url(text)
