@@ -3,6 +3,7 @@ from pathlib import Path
 from functools import wraps
 from collections.abc import Callable, Sequence, Awaitable
 
+from nonebot.matcher import Matcher # 在文件开头的导入区域添加
 from nonebot import logger
 from nonebot.matcher import current_bot, current_event
 from nonebot.adapters import Event
@@ -171,34 +172,21 @@ class UniHelper:
         except Exception:
             logger.warning(f"reaction {emoji} to {message_id} failed, maybe not support")
 
-    @classmethod
-    def with_reaction(cls, func: Callable[..., Awaitable[Any]]):
-        """自动回应装饰器
-
-        自动处理消息响应状态，并捕获 TipException 发送提示消息
-
-        Args:
-            func: 被装饰的函数
-
-        Returns:
-            装饰后的函数
-        """
-
+    @staticmethod
+    def with_reaction(func):
         @wraps(func)
-        async def wrapper(*args, **kwargs):
-            event = current_event.get()
-            await cls.message_reaction(event, "resolving")
-
+        async def wrapper(matcher: Matcher, *args, **kwargs):
+            # 检查配置是否启用反应功能
+            if not pconfig.parser_enable_reaction:
+                return await func(matcher, *args, **kwargs)
+            
+            # 原有的反应逻辑（保持不变）
             try:
-                result = await func(*args, **kwargs)
-            # except TipException as e:
-            #     await UniMessage.text(e.message).send()
-            #     raise
-            except Exception:
-                await cls.message_reaction(event, "fail")
-                raise
-
-            await cls.message_reaction(event, "done")
-            return result
-
+                await matcher.send_reaction("👀")  # 处理中
+                result = await func(matcher, *args, **kwargs)
+                await matcher.send_reaction("🎉")  # 成功
+                return result
+            except Exception as e:
+                await matcher.send_reaction("❌")  # 失败
+                raise e
         return wrapper
