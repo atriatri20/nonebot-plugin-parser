@@ -86,7 +86,14 @@ class BaseRenderer(ABC):
                 forwardable_segs.append(result.text)
 
             if pconfig.need_forward_contents or len(forwardable_segs) > 4:
-                forward_msg = UniHelper.construct_forward_message(forwardable_segs + dynamic_segs)
+                # 将所有图片和文本合并成一个消息
+                combined_msg = UniMessage()
+                for seg in forwardable_segs:
+                    combined_msg += seg
+
+                # 创建合并转发：合并的消息节点 + 动态内容节点
+                forward_nodes = [combined_msg] + dynamic_segs
+                forward_msg = UniHelper.construct_forward_message(forward_nodes)
                 yield UniMessage(forward_msg)
             else:
                 yield UniMessage(forwardable_segs)
